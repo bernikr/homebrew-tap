@@ -75,10 +75,21 @@ jobs:
                   updated = replace_field(r'^(  version\s+)"[^"]+"', new_ver, updated)
                   updated = replace_field(r'^(  sha256\s+)"[^"]+"', new_sha, updated)
 
-                  changed = updated != content
-                  if changed:
+                  # The old bottle was built for the old version, so a stale block would
+                  # make brew try to pour a bottle that does not exist. Drop it; the
+                  # "Build bottle" step adds a fresh block for the new version.
+                  updated = re.sub(r'\n  bottle do\n.*?\n  end\n', '', updated, flags=re.S)
+
+                  # Build a bottle when the formula has none yet (e.g. the very first
+                  # run), so users without a compiler can install it.
+                  needs_bottle = re.search(r'^  bottle do$', content, flags=re.M) is None
+
+                  changed = (updated != content) or needs_bottle
+                  if updated != content:
                       FORMULA_PATH.write_text(updated)
                       print(f"Updated formula to {new_ver}")
+                  elif needs_bottle:
+                      print(f"Formula is already at {new_ver}, but has no bottle yet")
                   else:
                       print(f"Already up to date ({new_ver})")
 
@@ -95,7 +106,11 @@ jobs:
                   git config user.name "github-actions[bot]"
                   git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
                   git add Formula/proxmox-backup-client-static.rb
-                  git commit -m "proxmox-backup-client-static ${{ steps.check.outputs.version }}"
+                  if git diff --cached --quiet; then
+                      echo "Formula fields are unchanged; no commit needed"
+                  else
+                      git commit -m "proxmox-backup-client-static ${{ steps.check.outputs.version }}"
+                  fi
 
             - name: Test updated formula with Linuxbrew
               if: steps.check.outputs.changed == 'true'
@@ -106,6 +121,65 @@ jobs:
                   brew install --verbose local/test/proxmox-backup-client-static
                   brew test local/test/proxmox-backup-client-static
 
-            - name: Push update
+            # Users on Linux without a compiler cannot install a source-only formula,
+            # so publish a bottle for every update.
+            - name: Build bottle
               if: steps.check.outputs.changed == 'true'
-              run: git push
+              env:
+                  ROOT_URL: https://github.com/${{ github.repository }}/releases/download/proxmox-backup-client-static-${{ steps.check.outputs.version }}
+              run: |
+                  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+                  export HOMEBREW_NO_AUTO_UPDATE=1
+                  brew uninstall local/test/proxmox-backup-client-static
+                  brew install --build-bottle local/test/proxmox-backup-client-static
+                  mkdir -p bottle
+                  cd bottle
+                  brew bottle --json --no-rebuild \
+                      --root-url "$ROOT_URL" \
+                      local/test/proxmox-backup-client-static
+                  # brew bottle names the local file with "--" while the URL it is
+                  # downloaded from uses "-", so rename it to the remote filename.
+                  python3 - <<'PY'
+                  import glob
+                  import json
+                  import os
+
+                  data = json.load(open(glob.glob("*.bottle.json")[0]))
+                  for tag in next(iter(data.values()))["bottle"]["tags"].values():
+                      if tag["local_filename"] != tag["filename"]:
+                          os.rename(tag["local_filename"], tag["filename"])
+                      print(f"Bottle asset: {tag['filename']}")
+                  PY
+
+            - name: Add bottle block to formula
+              if: steps.check.outputs.changed == 'true'
+              run: |
+                  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+                  export HOMEBREW_NO_AUTO_UPDATE=1
+                  cd bottle
+                  brew bottle --merge --write --no-commit ./*.bottle.json
+                  cp "$(brew --repository local/test)/Formula/proxmox-backup-client-static.rb" \
+                      "$GITHUB_WORKSPACE/Formula/proxmox-backup-client-static.rb"
+
+            - name: Upload bottle to GitHub release
+              if: steps.check.outputs.changed == 'true'
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: proxmox-backup-client-static-${{ steps.check.outputs.version }}
+                  VERSION: ${{ steps.check.outputs.version }}
+              run: |
+                  if ! gh release view "$TAG" >/dev/null 2>&1; then
+                      gh release create "$TAG" \
+                          --title "$TAG" \
+                          --notes "Bottle for proxmox-backup-client-static $VERSION"
+                  fi
+                  gh release upload "$TAG" bottle/*.bottle.tar.gz --clobber
+
+            - name: Commit bottle and push update
+              if: steps.check.outputs.changed == 'true'
+              run: |
+                  git add Formula/proxmox-backup-client-static.rb
+                  if ! git diff --cached --quiet; then
+                      git commit -m "bottle: proxmox-backup-client-static ${{ steps.check.outputs.version }}"
+                  fi
+                  git push

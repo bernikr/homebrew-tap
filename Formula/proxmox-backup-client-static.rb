@@ -15,7 +15,6 @@ class ProxmoxBackupClientStatic < Formula
   depends_on :linux
   depends_on arch: :x86_64
   depends_on "binutils" => :build
-  depends_on "zstd" => :build
 
   def install
     system "ar", "x", Dir["*.deb"].first
