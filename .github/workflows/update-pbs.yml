@@ -19,6 +19,7 @@ jobs:
               id: check
               run: |
                   python3 - <<'EOF'
+                  import os
                   import re
                   import subprocess
                   import urllib.request
