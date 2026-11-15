@@ -1,10 +1,10 @@
 class ProxmoxBackupClientStatic < Formula
   desc "Statically linked Proxmox Backup Client"
   homepage "https://pbs.proxmox.com/"
-  url "http://download.proxmox.com/debian/pbs-client/dists/trixie/main/binary-amd64/proxmox-backup-client-static_4.0.1-1_amd64.deb",
+  url "http://download.proxmox.com/debian/pbs-client/dists/trixie/main/binary-amd64/proxmox-backup-client-static_4.2.8-1_amd64.deb",
       using: :nounzip
-  version "4.0.1-1"
-  sha256 "REPLACE_WITH_ACTUAL_SHA256"
+  version "4.2.8-1"
+  sha256 "f20e5dd1565362f2c9bbfa892e4bda04e5e7a8fd9a14ef7c681ca716ac7c4001"
   license "AGPL-3.0-or-later"
 
   livecheck do

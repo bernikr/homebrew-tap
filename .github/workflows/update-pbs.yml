@@ -8,6 +8,10 @@ on:
 permissions:
     contents: write
 
+concurrency:
+    group: update-proxmox-backup-client-static
+    cancel-in-progress: false
+
 jobs:
     update:
         runs-on: ubuntu-latest
@@ -17,6 +21,8 @@ jobs:
 
             - name: Check upstream APT repo and update formula
               id: check
+              env:
+                  PYTHONWARNINGS: ignore
               run: |
                   python3 - <<'EOF'
                   import os
@@ -55,9 +61,19 @@ jobs:
                   new_sha = best["SHA256"]
 
                   content = FORMULA_PATH.read_text()
-                  updated = re.sub(r'(^\s*url\s+)"[^"]+"', rf'\1"{new_url}"', content, flags=re.M)
-                  updated = re.sub(r'(^\s*version\s+)"[^"]+"', rf'\1"{new_ver}"', updated, flags=re.M)
-                  updated = re.sub(r'(^\s*sha256\s+)"[^"]+"', rf'\1"{new_sha}"', updated, flags=re.M)
+
+                  def replace_field(pattern, value, source):
+                      # Only touch the first match so the livecheck block keeps its URL.
+                      updated, count = re.subn(
+                          pattern, lambda m: m.group(1) + f'"{value}"', source, count=1, flags=re.M
+                      )
+                      if count != 1:
+                          raise SystemExit(f"Could not update formula field matching {pattern!r}")
+                      return updated
+
+                  updated = replace_field(r'^(  url\s+)"[^"]+"', new_url, content)
+                  updated = replace_field(r'^(  version\s+)"[^"]+"', new_ver, updated)
+                  updated = replace_field(r'^(  sha256\s+)"[^"]+"', new_sha, updated)
 
                   changed = updated != content
                   if changed:
@@ -70,8 +86,16 @@ jobs:
                       out.write(f"changed={'true' if changed else 'false'}\n")
                       out.write(f"version={new_ver}\n")
                   EOF
-              env:
-                  PYTHONWARNINGS: ignore
+
+            # Commit before testing: "brew tap file://..." clones the git repo, so an
+            # uncommitted change on disk would not be picked up by brew.
+            - name: Commit formula update
+              if: steps.check.outputs.changed == 'true'
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add Formula/proxmox-backup-client-static.rb
+                  git commit -m "proxmox-backup-client-static ${{ steps.check.outputs.version }}"
 
             - name: Test updated formula with Linuxbrew
               if: steps.check.outputs.changed == 'true'
@@ -82,11 +106,6 @@ jobs:
                   brew install --verbose local/test/proxmox-backup-client-static
                   brew test local/test/proxmox-backup-client-static
 
-            - name: Commit and push update
+            - name: Push update
               if: steps.check.outputs.changed == 'true'
-              run: |
-                  git config user.name "github-actions[bot]"
-                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-                  git add Formula/proxmox-backup-client-static.rb
-                  git commit -m "proxmox-backup-client-static ${{ steps.check.outputs.version }}"
-                  git push
+              run: git push
