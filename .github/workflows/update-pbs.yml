@@ -1,0 +1,91 @@
+name: Update proxmox-backup-client-static
+
+on:
+    schedule:
+        - cron: "0 * * * *"
+    workflow_dispatch: # Allows manual trigger from the Actions tab
+
+permissions:
+    contents: write
+
+jobs:
+    update:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout tap
+              uses: actions/checkout@v4
+
+            - name: Check upstream APT repo and update formula
+              id: check
+              run: |
+                  python3 - <<'EOF'
+                  import re
+                  import subprocess
+                  import urllib.request
+                  from pathlib import Path
+
+                  PACKAGES_URL = "http://download.proxmox.com/debian/pbs-client/dists/trixie/main/binary-amd64/Packages"
+                  BASE_URL = "http://download.proxmox.com/debian/pbs-client/"
+                  FORMULA_PATH = Path("Formula/proxmox-backup-client-static.rb")
+
+                  text = urllib.request.urlopen(PACKAGES_URL, timeout=30).read().decode("utf-8")
+
+                  candidates = []
+                  for stanza in text.strip().split("\n\n"):
+                      fields = {}
+                      for line in stanza.splitlines():
+                          if ": " in line and not line.startswith(" "):
+                              k, v = line.split(": ", 1)
+                              fields[k] = v.strip()
+                      if fields.get("Package") == "proxmox-backup-client-static":
+                          candidates.append(fields)
+
+                  if not candidates:
+                      raise SystemExit("Package not found in Proxmox Packages index")
+
+                  best = candidates[0]
+                  for c in candidates[1:]:
+                      res = subprocess.run(["dpkg", "--compare-versions", c["Version"], "gt", best["Version"]])
+                      if res.returncode == 0:
+                          best = c
+
+                  new_url = BASE_URL + best["Filename"]
+                  new_ver = best["Version"]
+                  new_sha = best["SHA256"]
+
+                  content = FORMULA_PATH.read_text()
+                  updated = re.sub(r'(^\s*url\s+)"[^"]+"', rf'\1"{new_url}"', content, flags=re.M)
+                  updated = re.sub(r'(^\s*version\s+)"[^"]+"', rf'\1"{new_ver}"', updated, flags=re.M)
+                  updated = re.sub(r'(^\s*sha256\s+)"[^"]+"', rf'\1"{new_sha}"', updated, flags=re.M)
+
+                  changed = updated != content
+                  if changed:
+                      FORMULA_PATH.write_text(updated)
+                      print(f"Updated formula to {new_ver}")
+                  else:
+                      print(f"Already up to date ({new_ver})")
+
+                  with open(Path(os.environ["GITHUB_OUTPUT"]), "a") as out:
+                      out.write(f"changed={'true' if changed else 'false'}\n")
+                      out.write(f"version={new_ver}\n")
+                  EOF
+              env:
+                  PYTHONWARNINGS: ignore
+
+            - name: Test updated formula with Linuxbrew
+              if: steps.check.outputs.changed == 'true'
+              run: |
+                  eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+                  export HOMEBREW_NO_AUTO_UPDATE=1
+                  brew tap local/test "file://$GITHUB_WORKSPACE"
+                  brew install --verbose local/test/proxmox-backup-client-static
+                  brew test local/test/proxmox-backup-client-static
+
+            - name: Commit and push update
+              if: steps.check.outputs.changed == 'true'
+              run: |
+                  git config user.name "github-actions[bot]"
+                  git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+                  git add Formula/proxmox-backup-client-static.rb
+                  git commit -m "proxmox-backup-client-static ${{ steps.check.outputs.version }}"
+                  git push
