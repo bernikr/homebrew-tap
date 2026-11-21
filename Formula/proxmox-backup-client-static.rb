@@ -12,11 +12,6 @@ class ProxmoxBackupClientStatic < Formula
     regex(/^Filename: .*?proxmox-backup-client-static_([^_]+)_amd64\.deb$/i)
   end
 
-  bottle do
-    root_url "https://github.com/bernikr/homebrew-tap/releases/download/proxmox-backup-client-static-4.2.8-1"
-    sha256 cellar: :any_skip_relocation, x86_64_linux: "0741082c108ef6fedc5aa6657b5032659997c69d30afdd63c01e3e3ed7c71f6d"
-  end
-
   depends_on :linux
   depends_on arch: :x86_64
 
